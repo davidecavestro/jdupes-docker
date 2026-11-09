@@ -1,6 +1,6 @@
 # jdupes-docker
 
-Unofficial linux docker image for [jdypes](https://codeberg.org/jbruchon/jdupes), cross-platform duplicate file finder.
+Unofficial linux docker image for [jdupes](https://codeberg.org/jbruchon/jdupes), cross-platform duplicate file finder.
 
 Get it from GitHub container registry as
 

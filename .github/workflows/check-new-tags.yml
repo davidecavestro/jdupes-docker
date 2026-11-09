@@ -134,7 +134,6 @@ jobs:
         release_name: ${{ needs.build-and-push-docker-image.outputs.image_tag }}
         body: |
           Container images for this release:
-          - Docker Hub: `davidecavestro/jdupes:${{ needs.build-and-push-docker-image.outputs.image_tag }}`
           - GitHub Container Registry: `ghcr.io/davidecavestro/jdupes:${{ needs.build-and-push-docker-image.outputs.image_tag }}`
         draft: false
         prerelease: false

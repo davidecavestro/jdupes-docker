@@ -1,0 +1,140 @@
+name: Check for New Tags and Build Docker Image
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  push:
+    branches: [ main ]
+
+jobs:
+  check-new-tags:
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.compare-tags.outputs.new_tag }}
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Fetch Tags from Source Repository
+      run: |
+        git ls-remote --tags https://codeberg.org/jbruchon/jdupes.git | grep -v '\^{}' | awk '{print $2}' | sed 's#refs/tags/##' | sort -V > tags.txt
+      shell: bash
+
+    - name: Compare Tags
+      id: compare-tags
+      run: |
+        if [ -f .github/tags.txt ]; then
+          new_tag=$(comm -13 .github/tags.txt tags.txt | tail -n 1)
+          echo "$new_tag" > new_tag.txt
+        else
+          tail -n 1 tags.txt > new_tag.txt
+        fi
+        new_tag=$(cat new_tag.txt)
+        echo "new_tag=$new_tag" >> $GITHUB_ENV
+        echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+        cat $GITHUB_OUTPUT
+
+    - name: Store Current Tags
+      run: |
+        cp tags.txt .github/tags.txt
+      shell: bash
+
+    - name: Commit Updated Tags File
+      run: |
+        if ! git diff --quiet; then
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .github/tags.txt
+          git commit -m "Update tags list"
+          git push
+        else
+          echo "No changes to commit"
+        fi
+      shell: bash
+
+  build-and-push-docker-image:
+    runs-on: ubuntu-latest
+    needs: check-new-tags
+    if: ${{ needs.check-new-tags.outputs.new_tag != '' }}
+    outputs:
+      image_tag: ${{ steps.expose.outputs.image_tag }}
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+#    - name: Set up QEMU
+#      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: image=moby/buildkit:latest
+
+    - name: Log in to the Container registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push on debian
+      uses: docker/build-push-action@v5
+      with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          file: Dockerfile
+          build-args: |
+            TAG=${{ needs.check-new-tags.outputs.new_tag }}
+            REL=bookworm
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/davidecavestro/jdupes:${{ needs.check-new-tags.outputs.new_tag }}
+            ghcr.io/davidecavestro/jdupes:latest
+
+    - name: Expose tag
+      id: expose
+      run: |
+        image_tag=${{ needs.check-new-tags.outputs.new_tag }}
+        echo "image_tag=$image_tag" >> $GITHUB_ENV
+        echo "image_tag=$image_tag" >> $GITHUB_OUTPUT
+        cat $GITHUB_OUTPUT
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: build-and-push-docker-image
+    if: ${{ needs.build-and-push-docker-image.outputs.image_tag != '' }}
+
+    steps:
+    - name: Check if Release Exists
+      id: check_release
+      run: |
+        release_url="https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.build-and-push-docker-image.outputs.image_tag }}"
+        response=$(curl -s -o response.json -w "%{http_code}" \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          $release_url)
+        echo "response_code=$response" >> $GITHUB_ENV
+        if [[ $response -eq 200 ]]; then
+          echo "release_exists=true" >> $GITHUB_ENV
+        else
+          echo "release_exists=false" >> $GITHUB_ENV
+        fi
+
+    - name: Create GitHub Release
+      if: env.release_exists == 'false'
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ needs.build-and-push-docker-image.outputs.image_tag }}
+        release_name: ${{ needs.build-and-push-docker-image.outputs.image_tag }}
+        body: |
+          Container images for this release:
+          - Docker Hub: `davidecavestro/jdupes:${{ needs.build-and-push-docker-image.outputs.image_tag }}`
+          - GitHub Container Registry: `ghcr.io/davidecavestro/jdupes:${{ needs.build-and-push-docker-image.outputs.image_tag }}`
+        draft: false
+        prerelease: false
